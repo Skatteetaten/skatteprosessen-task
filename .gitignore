@@ -1,0 +1,16 @@
+*.uuid
+*.iml
+*.idea*
+*.class
+logs/*
+dokumentasjon/wiki/
+*.~lock.*
+wiki/*
+lastknownstate*.xml
+.classpath
+.factorypath
+.project
+.settings
+target/
+.flattened-pom.xml
+.attach_pid*
