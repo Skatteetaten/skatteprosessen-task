@@ -1,0 +1,684 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-3.1.xsd">
+
+    <changeSet id="1_task_owner" author="Skatteetaten">
+        <createTable tableName="TASK_OWNER">
+            <column name="OWNER" type="VARCHAR(250)">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="HEARTBEAT" type="DATETIME" defaultValueComputed="CURRENT_TIMESTAMP">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+
+        <createIndex tableName="TASK_OWNER" indexName="TASK_OWNER_IDX">
+            <column name="HEARTBEAT"/>
+        </createIndex>
+    </changeSet>
+
+    <changeSet id="1_task_topic" author="Skatteetaten">
+        <createTable tableName="TASK_TOPIC">
+            <column name="TOPIC" type="VARCHAR(250)">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+        </createTable>
+    </changeSet>
+
+    <changeSet id="1_task" author="Skatteetaten">
+        <preConditions onFail="MARK_RAN" onFailMessage="Specialized task definition found, not applying default">
+            <or>
+                <changeLogPropertyDefined property="no.skatteetaten.fastsetting.formueinntekt.felles.task.jdbc.partitioned" value="false"/>
+                <not>
+                    <or>
+                        <and>
+                            <dbms type="oracle"/>
+                            <sqlCheck expectedResult="TRUE">
+                                SELECT VALUE FROM V$OPTION WHERE PARAMETER = 'Partitioning'
+                            </sqlCheck>
+                        </and>
+                        <and>
+                            <dbms type="postgresql"/>
+                            <sqlCheck expectedResult="t">
+                                SELECT SPLIT_PART(CURRENT_SETTING('server_version'), '.', 1)::INTEGER > 10
+                            </sqlCheck>
+                        </and>
+                    </or>
+                </not>
+            </or>
+        </preConditions>
+
+        <createTable tableName="TASK">
+            <column name="TOPIC" type="VARCHAR(250)">
+                <constraints primaryKey="true" nullable="false" referencedTableName="TASK_TOPIC" referencedColumnNames="TOPIC" foreignKeyName="TASK_TOPIC_REF"/>
+            </column>
+            <column name="SEQUENCE" type="BIGINT" autoIncrement="true" startWith="1">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="IDENTIFIER" type="VARCHAR(500)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="STATE" type="NUMBER(1)" defaultValueNumeric="1">
+                <constraints nullable="false" checkConstraint="CHECK (STATE BETWEEN 0 AND 8)"/>
+            </column>
+            <column name="DESCENT" type="NUMBER(1)" defaultValueNumeric="1">
+                <constraints nullable="false" checkConstraint="CHECK (DESCENT BETWEEN 1 AND 6)"/>
+            </column>
+            <column name="OWNER" type="VARCHAR(250)">
+                <constraints referencedTableName="TASK_OWNER" referencedColumnNames="OWNER" foreignKeyName="TASK_OWNER_REF"/>
+            </column>
+            <column name="CREATED" type="DATETIME" defaultValueComputed="CURRENT_TIMESTAMP">
+                <constraints nullable="false"/>
+            </column>
+            <column name="COMPLETED" type="DATETIME">
+                <constraints nullable="true"/>
+            </column>
+            <column name="INPUT" type="CLOB"/>
+            <column name="OUTPUT" type="CLOB"/>
+        </createTable>
+
+        <createIndex tableName="TASK" indexName="TASK_BY_OWNER_IDX">
+            <column name="STATE"/>
+            <column name="OWNER"/>
+        </createIndex>
+
+        <createIndex tableName="TASK" indexName="TASK_BY_TOPIC_IDX" unique="true">
+            <column name="TOPIC"/>
+            <column name="STATE"/>
+            <column name="SEQUENCE"/>
+        </createIndex>
+
+        <createIndex tableName="TASK" indexName="TASK_BY_ID_IDX">
+            <column name="TOPIC"/>
+            <column name="IDENTIFIER"/>
+            <column name="STATE"/>
+            <column name="SEQUENCE"/>
+        </createIndex>
+
+        <addUniqueConstraint tableName="TASK" columnNames="TOPIC, SEQUENCE, IDENTIFIER"/>
+    </changeSet>
+
+    <changeSet id="1_task_on_oracle" author="Skatteetaten">
+        <preConditions onFail="MARK_RAN" onFailMessage="Not using Oracle or partitioning on Oracle is not supported">
+            <and>
+                <not>
+                    <changeLogPropertyDefined property="no.skatteetaten.fastsetting.formueinntekt.felles.task.jdbc.partitioned" value="false"/>
+                </not>
+                <dbms type="oracle"/>
+                <sqlCheck expectedResult="TRUE">
+                    SELECT VALUE FROM V$OPTION WHERE PARAMETER = 'Partitioning'
+                </sqlCheck>
+            </and>
+        </preConditions>
+
+        <sql>
+            CREATE TABLE TASK (
+            TOPIC VARCHAR2(250) NOT NULL,
+            SEQUENCE NUMBER(19) GENERATED ALWAYS AS IDENTITY NOT NULL,
+            IDENTIFIER VARCHAR2(500) NOT NULL,
+            STATE NUMBER(1) DEFAULT 1 NOT NULL CHECK (STATE BETWEEN 0 AND 8),
+            DESCENT NUMBER(1) DEFAULT 1 NOT NULL CHECK (DESCENT BETWEEN 1 AND 6),
+            OWNER VARCHAR2(250),
+            CREATED TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
+            INPUT CLOB,
+            OUTPUT CLOB,
+            COMPLETED TIMESTAMP,
+            CONSTRAINT TASK_PK PRIMARY KEY (TOPIC, SEQUENCE),
+            CONSTRAINT TASK_TOPIC_REF FOREIGN KEY (TOPIC) REFERENCES TASK_TOPIC (TOPIC),
+            CONSTRAINT TASK_OWNER_REF FOREIGN KEY (OWNER) REFERENCES TASK_OWNER (OWNER)
+            )
+            PARTITION BY LIST (TOPIC) AUTOMATIC
+            (
+            PARTITION DUMMY VALUES ('dummy')
+            )
+        </sql>
+
+        <sql>
+            CREATE INDEX TASK_BY_OWNER_IDX
+            ON TASK (STATE, OWNER) GLOBAL
+        </sql>
+
+        <sql>
+            CREATE INDEX TASK_BY_TOPIC_IDX
+            ON TASK (TOPIC, STATE, SEQUENCE) LOCAL
+        </sql>
+
+        <sql>
+            CREATE INDEX TASK_BY_ID_IDX
+            ON TASK (TOPIC, IDENTIFIER, STATE, SEQUENCE) LOCAL
+        </sql>
+    </changeSet>
+
+    <changeSet id="1_task_on_oracle_reset_partitioned" author="Skatteetaten">
+        <preConditions onFail="MARK_RAN" onFailMessage="Not using Oracle or partitioning on Oracle is not supported">
+            <and>
+                <not>
+                    <changeLogPropertyDefined property="no.skatteetaten.fastsetting.formueinntekt.felles.task.jdbc.partitioned" value="false"/>
+                </not>
+                <dbms type="oracle"/>
+                <sqlCheck expectedResult="TRUE">
+                    SELECT VALUE FROM V$OPTION WHERE PARAMETER = 'Partitioning'
+                </sqlCheck>
+            </and>
+        </preConditions>
+
+        <sql endDelimiter="/">
+            CREATE FUNCTION TASK_TOPIC_PURGE_ALL(TOPIC IN VARCHAR2)
+            RETURN NUMBER
+            IS
+            PARTITION_KEY VARCHAR2(250);
+            BEGIN
+            FOR PARTITION IN (SELECT PARTITION_NAME, HIGH_VALUE, HIGH_VALUE_LENGTH FROM USER_TAB_PARTITIONS WHERE TABLE_NAME = 'TASK')
+            LOOP
+            PARTITION_KEY := substr(PARTITION.HIGH_VALUE, 2, PARTITION.HIGH_VALUE_LENGTH - 2);
+            if PARTITION_KEY = TOPIC THEN
+            EXECUTE IMMEDIATE 'ALTER TABLE TASK TRUNCATE PARTITION ' || PARTITION.PARTITION_NAME;
+            RETURN (1);
+            end if;
+            END LOOP;
+            RETURN (1);
+            END;
+        </sql>
+    </changeSet>
+
+    <changeSet id="1_task_on_oracle_reset_unpartitioned" author="Skatteetaten">
+        <preConditions onFail="MARK_RAN" onFailMessage="Not using Oracle or partitioning on Oracle is supported">
+            <and>
+                <dbms type="oracle"/>
+                <or>
+                    <changeLogPropertyDefined property="no.skatteetaten.fastsetting.formueinntekt.felles.task.jdbc.partitioned" value="false"/>
+                    <not>
+                        <sqlCheck expectedResult="TRUE">
+                            SELECT VALUE FROM V$OPTION WHERE PARAMETER = 'Partitioning'
+                        </sqlCheck>
+                    </not>
+                </or>
+            </and>
+        </preConditions>
+
+        <sql endDelimiter="/">
+            CREATE FUNCTION TASK_TOPIC_PURGE_ALL(TOPIC IN VARCHAR2)
+            RETURN NUMBER
+            IS
+            BEGIN
+            RETURN (0);
+            END;
+        </sql>
+    </changeSet>
+
+    <changeSet id="1_task_on_postgres" author="Skatteetaten">
+        <preConditions onFail="MARK_RAN" onFailMessage="Not using Postgres or partitioning on Postgres is not supported">
+            <and>
+                <not>
+                    <changeLogPropertyDefined property="no.skatteetaten.fastsetting.formueinntekt.felles.task.jdbc.partitioned" value="false"/>
+                </not>
+                <dbms type="postgresql"/>
+                <sqlCheck expectedResult="t">
+                    SELECT SPLIT_PART(CURRENT_SETTING('server_version'), '.', 1)::INTEGER > 10
+                </sqlCheck>
+            </and>
+        </preConditions>
+
+        <sql>
+            CREATE TABLE TASK (
+            TOPIC VARCHAR(250) NOT NULL,
+            SEQUENCE BIGSERIAL,
+            IDENTIFIER VARCHAR(500) NOT NULL,
+            STATE NUMERIC(1) DEFAULT 1 NOT NULL CHECK (STATE BETWEEN 0 AND 8),
+            DESCENT NUMERIC(1) DEFAULT 1 NOT NULL CHECK (DESCENT BETWEEN 1 AND 6),
+            OWNER VARCHAR(250),
+            CREATED TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
+            INPUT TEXT,
+            OUTPUT TEXT,
+            COMPLETED TIMESTAMP,
+            CONSTRAINT TASK_PK PRIMARY KEY (TOPIC, SEQUENCE)
+            )
+            PARTITION BY LIST (TOPIC)
+        </sql>
+
+        <sql>
+            CREATE INDEX TASK_BY_OWNER_IDX
+            ON TASK (STATE, OWNER)
+        </sql>
+
+        <sql>
+            CREATE INDEX TASK_BY_TOPIC_IDX
+            ON TASK (TOPIC, STATE, SEQUENCE)
+        </sql>
+
+        <sql>
+            CREATE INDEX TASK_BY_ID_IDX
+            ON TASK (TOPIC, IDENTIFIER, STATE, SEQUENCE)
+        </sql>
+
+        <sql endDelimiter="/">
+            CREATE FUNCTION TASK_TOPIC_FCT()
+            RETURNS TRIGGER AS
+            $BODY$
+            BEGIN
+            EXECUTE 'CREATE TABLE ' || QUOTE_IDENT('TASK_P_' || MD5(NEW.TOPIC)) || '
+            PARTITION OF TASK
+            FOR VALUES IN (' || QUOTE_LITERAL(NEW.TOPIC) || ')';
+            EXECUTE 'ALTER TABLE ' || QUOTE_IDENT('TASK_P_' || MD5(NEW.TOPIC)) || '
+            ADD CONSTRAINT ' || QUOTE_IDENT('TASK_TOPIC_REF_' || MD5(NEW.TOPIC)) || '
+            FOREIGN KEY (TOPIC) REFERENCES TASK_TOPIC (TOPIC)';
+            EXECUTE 'ALTER TABLE ' || QUOTE_IDENT('TASK_P_' || MD5(NEW.TOPIC)) || '
+            ADD CONSTRAINT ' || QUOTE_IDENT('TASK_OWNER_REF_' || MD5(NEW.TOPIC)) || '
+            FOREIGN KEY (OWNER) REFERENCES TASK_OWNER (OWNER)';
+            RETURN NEW;
+            END;
+            $BODY$
+            LANGUAGE PLPGSQL;
+        </sql>
+
+        <sql>
+            CREATE TRIGGER TASK_TOPIC_TRG
+            AFTER INSERT ON TASK_TOPIC
+            FOR EACH ROW
+            EXECUTE PROCEDURE TASK_TOPIC_FCT()
+        </sql>
+    </changeSet>
+
+    <changeSet id="1_task_on_postgres_reset_partitioned" author="Skatteetaten">
+        <preConditions onFail="MARK_RAN" onFailMessage="Not using Postgres or partitioning on Postgres is not supported">
+            <and>
+                <not>
+                    <changeLogPropertyDefined property="no.skatteetaten.fastsetting.formueinntekt.felles.task.jdbc.partitioned" value="false"/>
+                </not>
+                <dbms type="postgresql"/>
+                <sqlCheck expectedResult="t">
+                    SELECT SPLIT_PART(CURRENT_SETTING('server_version'), '.', 1)::INTEGER > 10
+                </sqlCheck>
+            </and>
+        </preConditions>
+
+        <sql endDelimiter="/">
+            CREATE FUNCTION TASK_TOPIC_PURGE_ALL(TEXT)
+            RETURNS BOOLEAN
+            AS
+            $BODY$
+            BEGIN
+            EXECUTE 'TRUNCATE ' || QUOTE_IDENT('TASK_P_' || MD5($1));
+            RETURN TRUE;
+            END;
+            $BODY$
+            LANGUAGE PLPGSQL;
+        </sql>
+    </changeSet>
+
+    <changeSet id="1_task_on_postgres_purge_all_unpartitioned" author="Skatteetaten">
+        <preConditions onFail="MARK_RAN" onFailMessage="Not using Postgres or partitioning on Postgres is supported">
+            <and>
+                <dbms type="postgresql"/>
+                <or>
+                    <changeLogPropertyDefined property="no.skatteetaten.fastsetting.formueinntekt.felles.task.jdbc.partitioned" value="false"/>
+                    <sqlCheck expectedResult="f">
+                        SELECT SPLIT_PART(CURRENT_SETTING('server_version'), '.', 1)::INTEGER > 10
+                    </sqlCheck>
+                </or>
+            </and>
+        </preConditions>
+
+        <sql endDelimiter="/">
+            CREATE FUNCTION TASK_TOPIC_PURGE_ALL(TEXT)
+            RETURNS BOOLEAN
+            AS
+            $BODY$
+            BEGIN
+            RETURN FALSE;
+            END;
+            $BODY$
+            LANGUAGE PLPGSQL;
+        </sql>
+    </changeSet>
+
+    <changeSet id="1_task_date_index" author="Skatteetaten">
+        <createIndex tableName="TASK" indexName="TASK_BY_CREATION">
+            <column name="CREATED"/>
+            <column name="SEQUENCE"/>
+        </createIndex>
+    </changeSet>
+
+    <changeSet id="1_task_pretty_view" author="Skatteetaten" dbms="!hsql">
+        <preConditions onFail="MARK_RAN" onFailMessage="Using Hyper SQL or prettified view generation was disabled">
+            <not>
+                <or>
+                    <dbms type="hsqldb"/>
+                    <changeLogPropertyDefined property="no.skatteetaten.fastsetting.formueinntekt.felles.task.jdbc.pretty" value="false"/>
+                </or>
+            </not>
+        </preConditions>
+
+        <createView viewName="TASK_PRETTY">
+            SELECT TOPIC, SEQUENCE, IDENTIFIER, CREATED, COMPLETED,
+            CASE
+            WHEN STATE = 0 THEN 'ACTIVE'
+            WHEN STATE = 1 THEN 'READY'
+            WHEN STATE = 2 THEN 'EXPIRED'
+            WHEN STATE = 3 THEN 'SUCCEEDED'
+            WHEN STATE = 4 THEN 'SUSPENDED'
+            WHEN STATE = 5 THEN 'FILTERED'
+            WHEN STATE = 6 THEN 'FAILED'
+            WHEN STATE = 8 THEN 'REDUNDANT'
+            WHEN DESCENT = 3 THEN 'SUCCEEDED'
+            WHEN DESCENT = 4 THEN 'SUSPENDED'
+            WHEN DESCENT = 5 THEN 'FILTERED'
+            WHEN DESCENT = 6 THEN 'FAILED'
+            ELSE 'unexpected value: ' || STATE || ' with descent of ' || DESCENT
+            END STATE,
+            CASE
+            WHEN STATE = 8 THEN 'YES'
+            ELSE 'NO'
+            END RECREATED,
+            INPUT,
+            OUTPUT
+            FROM TASK
+        </createView>
+    </changeSet>
+
+    <changeSet id="1_task_pretty_view_textified" author="Skatteetaten">
+        <preConditions onFail="MARK_RAN" onFailMessage="Not using Hyper SQL or prettified view generation was disabled">
+            <and>
+                <dbms type="hsqldb"/>
+                <not>
+                    <changeLogPropertyDefined property="no.skatteetaten.fastsetting.formueinntekt.felles.task.jdbc.pretty" value="false"/>
+                </not>
+            </and>
+        </preConditions>
+
+        <createView viewName="TASK_PRETTY">
+            SELECT TOPIC, SEQUENCE, IDENTIFIER, CREATED, COMPLETED,
+            CASE
+            WHEN STATE = 0 THEN 'ACTIVE'
+            WHEN STATE = 1 THEN 'READY'
+            WHEN STATE = 2 THEN 'EXPIRED'
+            WHEN STATE = 3 THEN 'SUCCEEDED'
+            WHEN STATE = 4 THEN 'SUSPENDED'
+            WHEN STATE = 5 THEN 'FILTERED'
+            WHEN STATE = 6 THEN 'FAILED'
+            WHEN STATE = 8 THEN 'REDUNDANT'
+            WHEN DESCENT = 3 THEN 'SUCCEEDED'
+            WHEN DESCENT = 4 THEN 'SUSPENDED'
+            WHEN DESCENT = 5 THEN 'FILTERED'
+            WHEN DESCENT = 6 THEN 'FAILED'
+            ELSE 'unexpected value: ' || STATE || ' with descent of ' || DESCENT
+            END STATE,
+            CASE
+            WHEN STATE = 8 THEN 'YES'
+            ELSE 'NO'
+            END RECREATED,
+            CAST(SUBSTRING(INPUT, 1, 4000) AS VARCHAR(4000)) INPUT_TEXT,
+            INPUT,
+            CAST(SUBSTRING(OUTPUT, 1, 4000) AS VARCHAR(4000)) OUTPUT_TEXT,
+            OUTPUT
+            FROM TASK
+        </createView>
+    </changeSet>
+
+    <changeSet id="2_add_reference_to_task_table" author="Skatteetaten">
+        <addColumn tableName="TASK">
+            <column name="REFERENCE" type="VARCHAR(500)"/>
+        </addColumn>
+    </changeSet>
+
+    <changeSet id="3_index_for_results" author="Skatteetaten">
+        <preConditions onFail="MARK_RAN" onFailMessage="Specialized task definition found, not applying default">
+            <and>
+                <not>
+                    <dbms type="postgresql"/>
+                </not>
+                <or>
+                    <changeLogPropertyDefined property="no.skatteetaten.fastsetting.formueinntekt.felles.task.jdbc.partitioned" value="false"/>
+                    <not>
+                        <and>
+                            <dbms type="oracle"/>
+                            <sqlCheck expectedResult="TRUE">
+                                SELECT VALUE FROM V$OPTION WHERE PARAMETER = 'Partitioning'
+                            </sqlCheck>
+                        </and>
+                    </not>
+                </or>
+            </and>
+        </preConditions>
+
+        <createIndex tableName="TASK" indexName="TASK_BY_COMPLETION_IDX">
+            <column name="TOPIC"/>
+            <column name="STATE"/>
+            <column name="COMPLETED"/>
+        </createIndex>
+    </changeSet>
+
+    <changeSet id="3_index_for_results_on_oracle" author="Skatteetaten">
+        <preConditions onFail="MARK_RAN" onFailMessage="Not using Oracle or partitioning on Oracle is not supported">
+            <and>
+                <not>
+                    <changeLogPropertyDefined property="no.skatteetaten.fastsetting.formueinntekt.felles.task.jdbc.partitioned" value="false"/>
+                </not>
+                <dbms type="oracle"/>
+                <sqlCheck expectedResult="TRUE">
+                    SELECT VALUE FROM V$OPTION WHERE PARAMETER = 'Partitioning'
+                </sqlCheck>
+            </and>
+        </preConditions>
+
+        <sql>
+            CREATE INDEX TASK_BY_COMPLETION_IDX
+            ON TASK (TOPIC, STATE, COMPLETED) LOCAL
+        </sql>
+    </changeSet>
+
+    <changeSet id="3_index_for_results_on_postgres" author="Skatteetaten">
+        <preConditions onFail="MARK_RAN" onFailMessage="Not using Postgres">
+            <dbms type="postgresql"/>
+        </preConditions>
+
+        <sql>
+            CREATE INDEX TASK_BY_COMPLETION_IDX
+            ON TASK (TOPIC, STATE, COMPLETED)
+            WHERE STATE BETWEEN 3 AND 6
+            AND COMPLETED IS NOT NULL
+        </sql>
+    </changeSet>
+
+    <changeSet id="4_time_zone_utc_insert_default" author="Skatteetaten" dbms="!hsqldb">
+        <addDefaultValue tableName="TASK" columnName="CREATED" defaultValueComputed="CURRENT_TIMESTAMP AT TIME ZONE 'UTC'"/>
+    </changeSet>
+
+    <changeSet id="4_time_zone_utc_insert_default" author="Skatteetaten" dbms="hsqldb">
+        <sql>
+            ALTER TABLE TASK
+            ALTER CREATED SET DEFAULT CURRENT_TIMESTAMP AT TIME ZONE 'UTC'
+        </sql>
+    </changeSet>
+
+    <changeSet id="5_time_zone_utc_insert_default" author="Skatteetaten" dbms="!oracle">
+        <sql>
+            ALTER TABLE TASK
+            ALTER CREATED SET DEFAULT CURRENT_TIMESTAMP AT TIME ZONE 'UTC'
+        </sql>
+        <sql>
+            ALTER TABLE TASK_OWNER
+            ALTER HEARTBEAT SET DEFAULT CURRENT_TIMESTAMP AT TIME ZONE 'UTC'
+        </sql>
+    </changeSet>
+
+    <changeSet id="5_time_zone_utc_insert_default_on_oracle" author="Skatteetaten" dbms="oracle">
+        <sql>
+            ALTER TABLE TASK
+            MODIFY (CREATED DEFAULT CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
+        </sql>
+        <sql>
+            ALTER TABLE TASK_OWNER
+            MODIFY (HEARTBEAT DEFAULT CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
+        </sql>
+    </changeSet>
+
+    <changeSet id="6_index_for_reference" author="Skatteetaten">
+        <preConditions onFail="MARK_RAN" onFailMessage="Specialized task definition found, not applying default">
+            <or>
+                <changeLogPropertyDefined property="no.skatteetaten.fastsetting.formueinntekt.felles.task.jdbc.partitioned" value="false"/>
+                <not>
+                    <and>
+                        <dbms type="oracle"/>
+                        <sqlCheck expectedResult="TRUE">
+                            SELECT VALUE FROM V$OPTION WHERE PARAMETER = 'Partitioning'
+                        </sqlCheck>
+                    </and>
+                </not>
+            </or>
+        </preConditions>
+
+        <createIndex tableName="TASK" indexName="TASK_BY_REFERENCE_IDX">
+            <column name="REFERENCE"/>
+        </createIndex>
+    </changeSet>
+
+    <changeSet id="6_index_for_reference_oracle" author="Skatteetaten">
+        <preConditions onFail="MARK_RAN" onFailMessage="Not using Oracle or partitioning on Oracle is not supported">
+            <and>
+                <not>
+                    <changeLogPropertyDefined property="no.skatteetaten.fastsetting.formueinntekt.felles.task.jdbc.partitioned" value="false"/>
+                </not>
+                <dbms type="oracle"/>
+                <sqlCheck expectedResult="TRUE">
+                    SELECT VALUE FROM V$OPTION WHERE PARAMETER = 'Partitioning'
+                </sqlCheck>
+            </and>
+        </preConditions>
+
+        <sql>
+            CREATE INDEX TASK_BY_REFERENCE_IDX
+            ON TASK (REFERENCE) GLOBAL
+        </sql>
+    </changeSet>
+
+    <changeSet id="7_adjust_state_ordinals" author="Skatteetaten">
+
+        <sql>
+            UPDATE TASK
+            SET STATE = CASE WHEN (STATE = 3) THEN 6 ELSE 3 END
+            WHERE STATE = 3 OR STATE = 6
+        </sql>
+
+        <sql>
+            UPDATE TASK
+            SET DESCENT = CASE WHEN (DESCENT = 3) THEN 6 ELSE 3 END
+            WHERE DESCENT = 3 OR DESCENT = 6
+        </sql>
+    </changeSet>
+
+    <changeSet id="8_task_pretty_view_adjust" author="Skatteetaten" dbms="!hsql">
+        <preConditions onFail="MARK_RAN" onFailMessage="Using Hyper SQL or prettified view generation was disabled">
+            <not>
+                <or>
+                    <dbms type="hsqldb"/>
+                    <changeLogPropertyDefined property="no.skatteetaten.fastsetting.formueinntekt.felles.task.jdbc.pretty" value="false"/>
+                </or>
+            </not>
+        </preConditions>
+
+        <dropView viewName="TASK_PRETTY"/>
+
+        <createView viewName="TASK_PRETTY">
+            SELECT TOPIC, SEQUENCE, IDENTIFIER, CREATED, COMPLETED,
+                   CASE
+                       WHEN STATE = 0 THEN 'ACTIVE'
+                       WHEN STATE = 1 THEN 'READY'
+                       WHEN STATE = 2 THEN 'EXPIRED'
+                       WHEN STATE = 3 THEN 'FAILED'
+                       WHEN STATE = 4 THEN 'SUSPENDED'
+                       WHEN STATE = 5 THEN 'FILTERED'
+                       WHEN STATE = 6 THEN 'SUCCEEDED'
+                       WHEN STATE = 8 THEN 'REDUNDANT'
+                       WHEN DESCENT = 3 THEN 'FAILED'
+                       WHEN DESCENT = 4 THEN 'SUSPENDED'
+                       WHEN DESCENT = 5 THEN 'FILTERED'
+                       WHEN DESCENT = 6 THEN 'SUCCEEDED'
+                       ELSE 'unexpected value: ' || STATE || ' with descent of ' || DESCENT
+                       END STATE,
+                   CASE
+                       WHEN STATE = 8 THEN 'YES'
+                       ELSE 'NO'
+                       END RECREATED,
+                INPUT,
+                OUTPUT
+            FROM TASK
+        </createView>
+    </changeSet>
+
+    <changeSet id="8_task_pretty_view_textified_adjust" author="Skatteetaten">
+        <preConditions onFail="MARK_RAN" onFailMessage="Not using Hyper SQL or prettified view generation was disabled">
+            <and>
+                <dbms type="hsqldb"/>
+                <not>
+                    <changeLogPropertyDefined property="no.skatteetaten.fastsetting.formueinntekt.felles.task.jdbc.pretty" value="false"/>
+                </not>
+            </and>
+        </preConditions>
+
+        <dropView viewName="TASK_PRETTY"/>
+
+        <createView viewName="TASK_PRETTY">
+            SELECT TOPIC, SEQUENCE, IDENTIFIER, CREATED, COMPLETED,
+                   CASE
+                       WHEN STATE = 0 THEN 'ACTIVE'
+                       WHEN STATE = 1 THEN 'READY'
+                       WHEN STATE = 2 THEN 'EXPIRED'
+                       WHEN STATE = 3 THEN 'FAILED'
+                       WHEN STATE = 4 THEN 'SUSPENDED'
+                       WHEN STATE = 5 THEN 'FILTERED'
+                       WHEN STATE = 6 THEN 'SUCCEEDED'
+                       WHEN STATE = 8 THEN 'REDUNDANT'
+                       WHEN DESCENT = 3 THEN 'FAILED'
+                       WHEN DESCENT = 4 THEN 'SUSPENDED'
+                       WHEN DESCENT = 5 THEN 'FILTERED'
+                       WHEN DESCENT = 6 THEN 'SUCCEEDED'
+                       ELSE 'unexpected value: ' || STATE || ' with descent of ' || DESCENT
+                       END STATE,
+                   CASE
+                       WHEN STATE = 8 THEN 'YES'
+                       ELSE 'NO'
+                       END RECREATED,
+                   CAST(SUBSTRING(INPUT, 1, 4000) AS VARCHAR(4000)) INPUT_TEXT,
+                INPUT,
+                CAST(SUBSTRING(OUTPUT, 1, 4000) AS VARCHAR(4000)) OUTPUT_TEXT,
+                OUTPUT
+            FROM TASK
+        </createView>
+    </changeSet>
+
+    <changeSet id="9_drop_topic_on_postgres" author="Skatteetaten">
+        <preConditions onFail="MARK_RAN" onFailMessage="Not using Postgres or partitioning on Postgres is not supported">
+            <and>
+                <not>
+                    <changeLogPropertyDefined property="no.skatteetaten.fastsetting.formueinntekt.felles.task.jdbc.partitioned" value="false"/>
+                </not>
+                <dbms type="postgresql"/>
+                <sqlCheck expectedResult="t">
+                    SELECT SPLIT_PART(CURRENT_SETTING('server_version'), '.', 1)::INTEGER > 10
+                </sqlCheck>
+            </and>
+        </preConditions>
+
+        <sql endDelimiter="/">
+            CREATE FUNCTION TASK_TOPIC_DROP_FCT()
+            RETURNS TRIGGER AS
+            $BODY$
+            BEGIN
+            EXECUTE 'DROP TABLE ' || QUOTE_IDENT('TASK_P_' || MD5(OLD.TOPIC));
+            RETURN OLD;
+            END;
+            $BODY$
+            LANGUAGE PLPGSQL;
+        </sql>
+
+        <sql>
+            CREATE TRIGGER TASK_TOPIC_DROP_TRG
+            AFTER DELETE ON TASK_TOPIC
+            FOR EACH ROW
+            EXECUTE PROCEDURE TASK_TOPIC_DROP_FCT()
+        </sql>
+    </changeSet>
+</databaseChangeLog>

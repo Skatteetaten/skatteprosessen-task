@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+  xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-3.1.xsd">
+
+  <changeSet id="1_task_activation" author="Skatteetaten">
+    <createTable tableName="TASK_ACTIVATION">
+      <column name="TOPIC" type="VARCHAR(200)">
+        <constraints primaryKey="true" />
+      </column>
+      <column name="ACTIVE" type="BOOLEAN">
+        <constraints nullable="false" />
+      </column>
+    </createTable>
+  </changeSet>
+
+  <changeSet id="2_task_trigger" author="Skatteetaten">
+    <preConditions onFail="MARK_RAN" onFailMessage="Change event trigger is disabled or used database is not Postgres">
+      <and>
+        <dbms type="postgresql"/>
+        <not>
+          <changeLogPropertyDefined property="no.skatteetaten.fastsetting.formueinntekt.felles.task.jdbc.trigger" value="false"/>
+        </not>
+      </and>
+    </preConditions>
+
+    <sql endDelimiter="/">
+      CREATE FUNCTION TASK_NOTIFY_INSERT_FCT()
+      RETURNS TRIGGER AS
+      $BODY$
+      BEGIN
+        EXECUTE 'NOTIFY task_notification, ''WORK ' || MD5(NEW.TOPIC) || '''';
+        RETURN NEW;
+      END;
+      $BODY$
+      LANGUAGE PLPGSQL;
+    </sql>
+
+    <sql>
+      CREATE TRIGGER TASK_NOTIFY_INSERT_TRG
+      AFTER INSERT ON TASK_TOPIC
+      FOR EACH ROW
+      EXECUTE PROCEDURE TASK_NOTIFY_INSERT_FCT()
+    </sql>
+
+    <sql endDelimiter="/">
+      CREATE FUNCTION TASK_ACTIVATION_NOTIFY_FCT()
+      RETURNS TRIGGER AS
+      $BODY$
+      BEGIN
+        EXECUTE 'NOTIFY task_notification, ''ACTIVATION ' || MD5(NEW.TOPIC) || '''';
+        RETURN NEW;
+      END;
+      $BODY$
+      LANGUAGE PLPGSQL;
+    </sql>
+
+    <sql>
+      CREATE TRIGGER TASK_ACTIVATION_NOTIFY_TRG
+      AFTER INSERT OR UPDATE ON TASK_ACTIVATION
+      FOR EACH ROW
+      EXECUTE PROCEDURE TASK_ACTIVATION_NOTIFY_FCT()
+    </sql>
+  </changeSet>
+
+  <changeSet id="3_task_trigger_update" author="Skatteetaten">
+    <preConditions onFail="MARK_RAN" onFailMessage="Change event trigger is disabled or used database is not Postgres">
+      <and>
+        <dbms type="postgresql"/>
+        <not>
+          <changeLogPropertyDefined property="no.skatteetaten.fastsetting.formueinntekt.felles.task.jdbc.trigger" value="false"/>
+        </not>
+      </and>
+    </preConditions>
+
+    <sql endDelimiter="/">
+      CREATE OR REPLACE FUNCTION TASK_NOTIFY_INSERT_FCT()
+        RETURNS TRIGGER AS
+        $BODY$
+      BEGIN
+      PERFORM pg_notify('task_notification', 'WORK ' || MD5(NEW.TOPIC));
+      RETURN NEW;
+      END;
+      $BODY$
+      LANGUAGE PLPGSQL;
+    </sql>
+
+    <sql endDelimiter="/">
+      CREATE OR REPLACE FUNCTION TASK_ACTIVATION_NOTIFY_FCT()
+        RETURNS TRIGGER AS
+        $BODY$
+      BEGIN
+      PERFORM pg_notify('task_notification', 'ACTIVATION ' || MD5(NEW.TOPIC));
+      RETURN NEW;
+      END;
+      $BODY$
+      LANGUAGE PLPGSQL;
+    </sql>
+  </changeSet>
+</databaseChangeLog>
